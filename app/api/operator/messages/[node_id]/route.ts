@@ -15,3 +15,14 @@ export async function GET(req: Request, { params }: { params: { node_id: string 
     return chatError('history_failed', 503);
   }
 }
+
+export async function DELETE(req: Request, { params }: { params: { node_id: string } }) {
+  if (!checkAdmin(req)) return NextResponse.json({ error: 'unauth' }, { status: 401, headers: corsHeaders });
+  try {
+    const r = await pool.query('DELETE FROM messages WHERE node_id = $1', [params.node_id]);
+    return NextResponse.json({ status: 'ok', deleted: r.rowCount ?? 0 }, { headers: corsHeaders });
+  } catch (error) {
+    console.error('[chat] delete failed', error);
+    return chatError('delete_failed', 503);
+  }
+}
