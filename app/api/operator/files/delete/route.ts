@@ -3,21 +3,76 @@ import { checkAdmin, corsHeaders, optionsRes } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
+type StorageEntry = {
+  name: string;
+  id: string | null;
+  metadata: unknown;
+};
+
+async function listPaths(
+  baseUrl: string,
+  key: string,
+  prefix: string,
+  out: string[],
+  depth = 0,
+): Promise<void> {
+  if (depth > 5 || out.length >= 5000) return;
+
+  const res = await fetch(`${baseUrl}/storage/v1/object/list/files`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      prefix,
+      limit: 1000,
+      sortBy: { column: 'created_at', order: 'desc' },
+    }),
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    throw new Error(`list ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+
+  const entries = (await res.json()) as StorageEntry[];
+  for (const entry of entries) {
+    const full = prefix
+      ? `${prefix.replace(/\/+$/, '')}/${entry.name}`
+      : entry.name;
+    const isFolder = entry.id === null || entry.metadata === null;
+    if (isFolder) {
+      await listPaths(baseUrl, key, `${full}/`, out, depth + 1);
+      continue;
+    }
+    out.push(full);
+    if (out.length >= 5000) return;
+  }
+}
+
 export async function OPTIONS() { return optionsRes(); }
 
 export async function DELETE(req: Request) {
-  if (!checkAdmin(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401, headers: corsHeaders });
-
-  const { searchParams } = new URL(req.url);
-  const rawPath = (searchParams.get('path') || '').trim();
-
-  if (!rawPath || rawPath.includes('..')) {
-    return NextResponse.json({ error: 'Invalid path' }, { status: 400, headers: corsHeaders });
+  if (!checkAdmin(req)) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401, headers: corsHeaders });
   }
 
-  const objectPath = rawPath.startsWith('files/')
-    ? rawPath.slice('files/'.length)
-    : rawPath.replace(/^\/+/, '');
+  const { searchParams } = new URL(req.url);
+
+  let prefixes = searchParams.getAll('path')
+    .map((p) => p.trim().replace(/^\/+/, ''))
+    .filter(Boolean)
+    .map((p) => (p.startsWith('files/') ? p.slice('files/'.length) : p));
+
+  const all = searchParams.get('all') === '1';
+
+  if (prefixes.some((p) => p.includes('..'))) {
+    return NextResponse.json({ error: 'Invalid path' }, { status: 400, headers: corsHeaders });
+  }
+  if (!prefixes.length && !all) {
+    return NextResponse.json({ error: 'nothing_selected' }, { status: 400, headers: corsHeaders });
+  }
 
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SECRET_KEY;
@@ -27,19 +82,44 @@ export async function DELETE(req: Request) {
   }
 
   const baseUrl = supabaseUrl.replace(/\/$/, '');
-  const res = await fetch(`${baseUrl}/storage/v1/object/files`, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${supabaseKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ prefixes: [objectPath] }),
-  });
 
-  if (!res.ok) {
-    const err = await res.text();
-    return NextResponse.json({ error: `Storage returned ${res.status}: ${err.slice(0, 300)}` }, { status: 502, headers: corsHeaders });
+  try {
+    if (!prefixes.length) {
+      const found: string[] = [];
+      await listPaths(baseUrl, supabaseKey, '', found);
+      prefixes = found;
+    }
+
+    if (!prefixes.length) {
+      return NextResponse.json({ status: 'ok', deleted: 0 }, { headers: corsHeaders });
+    }
+
+    let deleted = 0;
+    for (let i = 0; i < prefixes.length; i += 100) {
+      const chunk = prefixes.slice(i, i + 100);
+      const res = await fetch(`${baseUrl}/storage/v1/object/files`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prefixes: chunk }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        return NextResponse.json(
+          { error: `Storage returned ${res.status}: ${err.slice(0, 300)}`, deleted },
+          { status: 502, headers: corsHeaders },
+        );
+      }
+      deleted += chunk.length;
+    }
+
+    return NextResponse.json({ status: 'ok', deleted }, { headers: corsHeaders });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'delete_failed' },
+      { status: 502, headers: corsHeaders },
+    );
   }
-
-  return NextResponse.json({ status: 'ok', deleted: objectPath }, { headers: corsHeaders });
 }
