@@ -32,6 +32,7 @@ export async function GET(req: Request, { params }: { params: { node_id: string 
 
   const screenshots = data.map((f) => ({
     name: `${node_id}/${f.name}`,
+    path: `${node_id}/${f.name}`,
     id: f.id,
     created_at: f.created_at,
     node_id,

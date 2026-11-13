@@ -12,10 +12,11 @@ export async function POST(req: Request) {
   
   // SỬA: created_at là BIGINT, insert trực tiếp Math.floor(Date.now() / 1000)
   try {
+    const channel = b.event === true ? 'event_from_node' : 'to_operator';
     await pool.query(
     `INSERT INTO messages (node_id, channel, body, created_at) 
-     VALUES ($1, 'to_operator', $2, $3)`,
-    [b.node_id, b.body, Math.floor(Date.now() / 1000)]
+     VALUES ($1, $2, $3, $4)`,
+    [b.node_id, channel, b.body, Math.floor(Date.now() / 1000)]
   );
   } catch (error) {
     console.error('[chat] send failed', error);

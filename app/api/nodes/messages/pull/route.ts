@@ -20,9 +20,10 @@ export async function POST(req: Request) {
   // Legacy timestamp clients remain supported; current clients paginate by ID.
   try {
     const rows = await pool.query(
-    `SELECT id, body, created_at 
+    `SELECT id, body, channel, created_at 
      FROM messages 
-     WHERE node_id = $1 AND channel = 'to_node' 
+     WHERE node_id = $1 
+     AND channel IN ('to_node', 'event_to_node', 'event_from_node')
      AND ${hasId ? 'id' : 'created_at'} > $2 
      ORDER BY id ASC LIMIT 20`, 
     [b.node_id, cursor]
