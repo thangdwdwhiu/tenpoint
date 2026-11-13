@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: #0b0e13;
+  color: #e7eaf0;
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(139, 123, 255, 0.35);
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-line bg-panel p-5 shadow-[0_8px_30px_rgba(0,0,0,0.12)];
+  }
+
+  .table-head {
+    @apply bg-white/[0.025] text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-muted;
+  }
+
+  .table-cell {
+    @apply border-t border-line px-5 py-4 align-middle text-sm;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize;
+  }
+
+  .status-green {
+    @apply border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-300;
+  }
+
+  .status-amber {
+    @apply border-amber-400/20 bg-amber-400/[0.08] text-amber-300;
+  }
+
+  .status-red {
+    @apply border-rose-400/20 bg-rose-400/[0.08] text-rose-300;
+  }
+
+  .status-blue {
+    @apply border-sky-400/20 bg-sky-400/[0.08] text-sky-300;
+  }
+
+  .status-neutral {
+    @apply border-slate-400/20 bg-slate-400/[0.08] text-slate-300;
+  }
+}

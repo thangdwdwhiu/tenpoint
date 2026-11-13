@@ -1,0 +1,69 @@
+# =========================
+# ENVIRONMENT VARIABLES
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# DEPENDENCIES
+# =========================
+node_modules/
+.pnpm-store/
+
+# =========================
+# BUILD OUTPUT
+# =========================
+dist/
+build/
+.next/
+out/
+coverage/
+.turbo/
+
+# =========================
+# LOG FILES
+# =========================
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# CACHE
+# =========================
+.cache/
+.parcel-cache/
+*.tsbuildinfo
+.eslintcache
+
+# =========================
+# SYSTEM FILES
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# IDE / EDITOR
+# =========================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# =========================
+# TEMPORARY FILES
+# =========================
+tmp/
+temp/
+*.tmp
+*.bak
+
+# =========================
+# UPLOADED FILES
+# =========================
+uploads/
