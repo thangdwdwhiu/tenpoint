@@ -33,7 +33,8 @@ Công cụ có sẵn:
 - chrome_eval: {"code":"JS"} — chạy JavaScript trong tab.
 
 Sau khi nhận kết quả công cụ, bạn sẽ được gọi lại để tiếp tục. Nếu đã đủ thông tin, trả lời cuối cùng bằng văn bản bình thường.
-Công cụ được thực thi tự động. Nếu công cụ lỗi, hãy thử cách khác hoặc giải thích ngắn gọn.`;
+Công cụ được thực thi tự động. Nếu công cụ lỗi, hãy thử cách khác hoặc giải thích ngắn gọn.
+Ảnh/file đính kèm có thể được gửi lại ở mỗi bước; đó vẫn là nội dung ban đầu của người dùng, không phải yêu cầu mới. Khi có ảnh/file, hãy xem/đọc trực tiếp và trả lời; tuyệt đối không yêu cầu người dùng gửi lại ảnh.`;
 
 type Attachment = {
   type?: string;
@@ -350,6 +351,7 @@ export async function POST(req: Request) {
   }
 
   const agent = Boolean(body.agent);
+  const step = Math.max(0, Number(body.step) || 0);
   const prompt = String(body.prompt || '').trim().slice(0, 4000);
   const history = cleanHistory(body.history, agent ? 30 : 10);
   const attachment = cleanAttachment(body.attachment);
@@ -363,7 +365,9 @@ export async function POST(req: Request) {
 
   const requestId = crypto.randomUUID();
   const now = Date.now();
-  if (prompt || attachment) {
+  // Agent steps after the first resend the attachment so vision survives
+  // tool calls; do not echo it as a new user message in the panel.
+  if ((prompt || attachment) && (!agent || step === 0)) {
     await broadcast(nodeId, {
       id: `${requestId}-user`,
       role: 'user',
