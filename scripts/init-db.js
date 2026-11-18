@@ -109,6 +109,9 @@ async function init() {
       INSERT INTO app_settings (key, value, updated_at)
       VALUES ('ai_enabled', 'true', EXTRACT(EPOCH FROM now())::BIGINT)
       ON CONFLICT (key) DO NOTHING;
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('ai_provider', 'deepseek', EXTRACT(EPOCH FROM now())::BIGINT)
+      ON CONFLICT (key) DO NOTHING;
       CREATE TABLE IF NOT EXISTS ai_usage (
         node_id TEXT NOT NULL,
         day TEXT NOT NULL,

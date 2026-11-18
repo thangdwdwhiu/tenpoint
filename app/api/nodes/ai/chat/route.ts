@@ -85,6 +85,18 @@ async function aiEnabled(): Promise<boolean> {
   }
 }
 
+async function aiProvider(): Promise<'deepseek' | 'muse'> {
+  try {
+    const result = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'ai_provider'`);
+    if (result.rowCount === 0) return 'deepseek';
+    return String(result.rows[0].value).toLowerCase() === 'muse'
+      ? 'muse' : 'deepseek';
+  } catch {
+    return 'deepseek';
+  }
+}
+
 async function bumpUsage(nodeId: string, usage: Record<string, unknown>) {
   try {
     const day = new Date().toISOString().slice(0, 10);
@@ -326,18 +338,25 @@ export async function POST(req: Request) {
 
   let result: ProviderResult | null = null;
   let lastError = '';
+  const preferred = await aiProvider();
+  const primary = preferred === 'muse' ? callMuse : callDeepSeek;
+  const fallback = preferred === 'muse' ? callDeepSeek : callMuse;
+  const primaryName = preferred === 'muse' ? 'Muse' : 'DeepSeek';
+  const fallbackName = preferred === 'muse' ? 'DeepSeek' : 'Muse';
   try {
-    result = await callDeepSeek(prompt, history, attachment);
+    result = await primary(prompt, history, attachment);
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error);
-    console.warn('[AI] DeepSeek failed, falling back to Muse:', lastError);
+    console.warn(`[AI] ${primaryName} failed, falling back to ${fallbackName}:`,
+      lastError);
   }
   if (!result) {
     try {
-      result = await callMuse(prompt, history, attachment);
+      result = await fallback(prompt, history, attachment);
     } catch (error) {
-      const museError = error instanceof Error ? error.message : String(error);
-      lastError = `${lastError} | muse: ${museError}`;
+      const fallbackError = error instanceof Error
+        ? error.message : String(error);
+      lastError = `${lastError} | ${fallbackName.toLowerCase()}: ${fallbackError}`;
     }
   }
 

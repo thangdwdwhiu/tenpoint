@@ -5,14 +5,23 @@ import { checkAdmin, corsHeaders, optionsRes } from '@/lib/auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function readEnabled(): Promise<boolean> {
+async function readSettings(): Promise<{
+  ai_enabled: boolean;
+  ai_provider: 'deepseek' | 'muse';
+}> {
   try {
     const result = await pool.query(
-      `SELECT value FROM app_settings WHERE key = 'ai_enabled'`);
-    if (result.rowCount === 0) return true;
-    return String(result.rows[0].value).toLowerCase() === 'true';
+      `SELECT key, value FROM app_settings
+       WHERE key IN ('ai_enabled', 'ai_provider')`);
+    const values = new Map(
+      result.rows.map((row) => [String(row.key), String(row.value)]));
+    return {
+      ai_enabled: (values.get('ai_enabled') ?? 'true').toLowerCase() === 'true',
+      ai_provider: (values.get('ai_provider') ?? 'deepseek').toLowerCase()
+        === 'muse' ? 'muse' : 'deepseek',
+    };
   } catch {
-    return true;
+    return { ai_enabled: true, ai_provider: 'deepseek' };
   }
 }
 
@@ -23,7 +32,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'unauthorized' },
       { status: 401, headers: corsHeaders });
   }
-  return NextResponse.json({ ai_enabled: await readEnabled() },
+  return NextResponse.json(await readSettings(),
     { headers: corsHeaders });
 }
 
@@ -39,20 +48,34 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid_json' },
       { status: 400, headers: corsHeaders });
   }
-  const enabled = Boolean(body.ai_enabled);
+  const now = Math.floor(Date.now() / 1000);
   try {
-    await pool.query(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ('ai_enabled', $1, $2)
-       ON CONFLICT (key) DO UPDATE SET
-         value = EXCLUDED.value,
-         updated_at = EXCLUDED.updated_at`,
-      [enabled ? 'true' : 'false', Math.floor(Date.now() / 1000)]);
+    if ('ai_enabled' in body) {
+      const enabled = Boolean(body.ai_enabled);
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('ai_enabled', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET
+           value = EXCLUDED.value,
+           updated_at = EXCLUDED.updated_at`,
+        [enabled ? 'true' : 'false', now]);
+    }
+    if ('ai_provider' in body) {
+      const provider = String(body.ai_provider).toLowerCase() === 'muse'
+        ? 'muse' : 'deepseek';
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('ai_provider', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET
+           value = EXCLUDED.value,
+           updated_at = EXCLUDED.updated_at`,
+        [provider, now]);
+    }
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'db_error' },
       { status: 503, headers: corsHeaders });
   }
-  return NextResponse.json({ ok: true, ai_enabled: enabled },
+  return NextResponse.json({ ok: true, ...(await readSettings()) },
     { headers: corsHeaders });
 }
