@@ -352,6 +352,7 @@ export async function POST(req: Request) {
 
   const agent = Boolean(body.agent);
   const step = Math.max(0, Number(body.step) || 0);
+  const silent = Boolean(body.silent);
   const prompt = String(body.prompt || '').trim().slice(0, 4000);
   const history = cleanHistory(body.history, agent ? 30 : 10);
   const attachment = cleanAttachment(body.attachment);
@@ -367,7 +368,7 @@ export async function POST(req: Request) {
   const now = Date.now();
   // Agent steps after the first resend the attachment so vision survives
   // tool calls; do not echo it as a new user message in the panel.
-  if ((prompt || attachment) && (!agent || step === 0)) {
+  if ((prompt || attachment) && !silent && (!agent || step === 0)) {
     await broadcast(nodeId, {
       id: `${requestId}-user`,
       role: 'user',
