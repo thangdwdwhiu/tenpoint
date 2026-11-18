@@ -237,7 +237,10 @@ async function callDeepSeek(
       body: JSON.stringify({
         model,
         messages,
-        max_tokens: 1800,
+        max_tokens: 4096,
+        // deepseek-flash otherwise spends the whole budget on hidden
+        // reasoning and returns an empty answer for dense exam images.
+        reasoning_effort: 'none',
         temperature: 0.3,
       }),
     },
