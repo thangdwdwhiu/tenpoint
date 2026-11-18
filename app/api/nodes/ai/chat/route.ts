@@ -16,6 +16,8 @@ const AGENT_PROMPT = `BẠN ĐANG Ở CHẾ ĐỘ AGENT.
 Bạn có thể yêu cầu bot thực hiện một công cụ. Khi cần công cụ, chỉ trả về ĐÚNG MỘT object JSON, không kèm văn bản, không dùng markdown:
 {"tool":"<tên_công_cụ>","args":{...}}
 
+TUYỆT ĐỐI không dùng định dạng DSML, XML, thẻ <|...|>, invoke hay parameter. Chỉ JSON thuần.
+
 Công cụ có sẵn:
 - read_file: {"path":"C:\\\\duong\\\\dan\\\\file"} — đọc text/PDF/DOCX/XLSX, tối đa ~200KB.
 - write_file: {"path":"C:\\\\...","content":"...","base64":false} — ghi/ghi đè file.
