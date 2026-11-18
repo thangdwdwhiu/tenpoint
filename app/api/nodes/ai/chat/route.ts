@@ -418,6 +418,7 @@ export async function POST(req: Request) {
   }
 
   if (!result) {
+    console.warn('[AI] all providers failed:', lastError);
     await broadcast(nodeId, {
       id: `${requestId}-error`,
       role: 'assistant',
@@ -426,7 +427,11 @@ export async function POST(req: Request) {
       ts: Date.now(),
     });
     return NextResponse.json(
-      { ok: false, error: 'AI tạm thời không trả lời được. Vui lòng thử lại sau.' },
+      {
+        ok: false,
+        error: 'AI tạm thời không trả lời được. Vui lòng thử lại sau.',
+        detail: lastError.slice(0, 500),
+      },
       { status: 502, headers: corsHeaders });
   }
 
