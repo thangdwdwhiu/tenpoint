@@ -34,7 +34,8 @@ Công cụ có sẵn:
 
 Sau khi nhận kết quả công cụ, bạn sẽ được gọi lại để tiếp tục. Nếu đã đủ thông tin, trả lời cuối cùng bằng văn bản bình thường.
 Công cụ được thực thi tự động. Nếu công cụ lỗi, hãy thử cách khác hoặc giải thích ngắn gọn.
-Ảnh/file đính kèm có thể được gửi lại ở mỗi bước; đó vẫn là nội dung ban đầu của người dùng, không phải yêu cầu mới. Khi có ảnh/file, hãy xem/đọc trực tiếp và trả lời; tuyệt đối không yêu cầu người dùng gửi lại ảnh.`;
+Ảnh/file đính kèm có thể được gửi lại ở mỗi bước; đó vẫn là nội dung ban đầu của người dùng, không phải yêu cầu mới. Khi có ảnh/file, hãy xem/đọc trực tiếp và trả lời; tuyệt đối không yêu cầu người dùng gửi lại ảnh.
+Khi giải bài hoặc ghi file, trình bày đủ ý nhưng ngắn gọn (tối đa khoảng 1200 từ), không lặp lại toàn bộ đề.`;
 
 type Attachment = {
   type?: string;
@@ -185,11 +186,27 @@ async function broadcast(nodeId: string, payload: Record<string, unknown>) {
   }
 }
 
-async function fetchJson(url: string, init: RequestInit, timeoutMs: number) {
+type FetchResult = {
+  ok: boolean;
+  status: number;
+  text: string;
+  data: any;
+};
+
+async function fetchJson(
+  url: string, init: RequestInit, timeoutMs: number,
+): Promise<FetchResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    // Read the body while the timer is still armed. Clearing it right after
+    // fetch() would let a slow generation run past the provider timeout and
+    // past Vercel's 60 s function limit.
+    const text = await response.text();
+    let data: any = null;
+    try { data = JSON.parse(text); } catch { data = null; }
+    return { ok: response.ok, status: response.status, text, data };
   } finally {
     clearTimeout(timer);
   }
@@ -214,7 +231,7 @@ function buildUserContent(prompt: string, attachment: Attachment | null) {
 
 async function callDeepSeek(
   prompt: string, history: HistoryItem[], attachment: Attachment | null,
-  systemPrompt: string = SYSTEM_PROMPT,
+  systemPrompt: string = SYSTEM_PROMPT, timeoutMs: number = 50000,
 ): Promise<ProviderResult> {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('missing DEEPSEEK_API_KEY');
@@ -244,12 +261,12 @@ async function callDeepSeek(
         temperature: 0.3,
       }),
     },
-    25000,
+    timeoutMs,
   );
   if (!response.ok) {
-    throw new Error(`deepseek HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+    throw new Error(`deepseek HTTP ${response.status}: ${response.text.slice(0, 300)}`);
   }
-  const data = await response.json() as Record<string, any>;
+  const data = response.data as Record<string, any>;
   const answer = data?.choices?.[0]?.message?.content;
   if (!answer || !String(answer).trim()) {
     throw new Error('deepseek empty answer');
@@ -264,7 +281,7 @@ async function callDeepSeek(
 
 async function callMuse(
   prompt: string, history: HistoryItem[], attachment: Attachment | null,
-  systemPrompt: string = SYSTEM_PROMPT,
+  systemPrompt: string = SYSTEM_PROMPT, timeoutMs: number = 40000,
 ): Promise<ProviderResult> {
   const key = process.env.MUSE_API_KEY;
   if (!key) throw new Error('missing MUSE_API_KEY');
@@ -303,12 +320,12 @@ async function callMuse(
       },
       body: JSON.stringify({ model, input }),
     },
-    25000,
+    timeoutMs,
   );
   if (!response.ok) {
-    throw new Error(`muse HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+    throw new Error(`muse HTTP ${response.status}: ${response.text.slice(0, 300)}`);
   }
-  const data = await response.json() as Record<string, any>;
+  const data = response.data as Record<string, any>;
   let answer = '';
   for (const item of data?.output || []) {
     if (item?.type !== 'message') continue;
@@ -395,21 +412,28 @@ export async function POST(req: Request) {
 
   let result: ProviderResult | null = null;
   let lastError = '';
+  const started = Date.now();
   const preferred = await aiProvider();
   const primary = preferred === 'muse' ? callMuse : callDeepSeek;
   const fallback = preferred === 'muse' ? callDeepSeek : callMuse;
   const primaryName = preferred === 'muse' ? 'Muse' : 'DeepSeek';
   const fallbackName = preferred === 'muse' ? 'DeepSeek' : 'Muse';
+  // One provider must not eat Vercel's 60 s budget: DeepSeek gets 50 s,
+  // Muse 40 s, and the fallback only whatever remains of 55 s.
+  const primaryTimeout = preferred === 'muse' ? 40000 : 50000;
   try {
-    result = await primary(prompt, history, attachment, systemPrompt);
+    result = await primary(
+      prompt, history, attachment, systemPrompt, primaryTimeout);
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error);
     console.warn(`[AI] ${primaryName} failed, falling back to ${fallbackName}:`,
       lastError);
   }
   if (!result) {
+    const remaining = Math.max(6000, 55000 - (Date.now() - started));
     try {
-      result = await fallback(prompt, history, attachment, systemPrompt);
+      result = await fallback(
+        prompt, history, attachment, systemPrompt, remaining);
     } catch (error) {
       const fallbackError = error instanceof Error
         ? error.message : String(error);
