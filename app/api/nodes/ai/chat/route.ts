@@ -241,7 +241,7 @@ async function callDeepSeek(
         temperature: 0.3,
       }),
     },
-    45000,
+    25000,
   );
   if (!response.ok) {
     throw new Error(`deepseek HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
@@ -300,7 +300,7 @@ async function callMuse(
       },
       body: JSON.stringify({ model, input }),
     },
-    50000,
+    25000,
   );
   if (!response.ok) {
     throw new Error(`muse HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
