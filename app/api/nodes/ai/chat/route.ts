@@ -67,6 +67,7 @@ function mimeFromName(name: string): string {
 function cleanHistory(value: unknown, limit = 10): HistoryItem[] {
   if (!Array.isArray(value)) return [];
   const items: HistoryItem[] = [];
+  let total = 0;
   for (const raw of value.slice(-limit)) {
     if (!raw || typeof raw !== 'object') continue;
     const role = (raw as Record<string, unknown>).role;
@@ -76,7 +77,10 @@ function cleanHistory(value: unknown, limit = 10): HistoryItem[] {
     }
     const text = content.trim();
     if (!text) continue;
-    items.push({ role, content: text.slice(0, 2000) });
+    const clipped = text.slice(0, 8000);
+    if (total + clipped.length > 120000) break;
+    total += clipped.length;
+    items.push({ role, content: clipped });
   }
   return items;
 }
@@ -286,7 +290,16 @@ async function callDeepSeek(
   if (prompt || attachment) {
     messages.push({ role: 'user', content: buildUserContent(prompt, attachment) });
   }
-  const response = await fetchJson(
+  const requestBody: Record<string, any> = {
+    model,
+    messages,
+    max_tokens: 16384,
+    // deepseek-flash otherwise spends the whole budget on hidden
+    // reasoning and returns an empty answer for dense exam images.
+    reasoning_effort: 'none',
+    temperature: 0.3,
+  };
+  const fetchCompletion = () => fetchJson(
     'https://api.deepseek.com/chat/completions',
     {
       method: 'POST',
@@ -294,18 +307,29 @@ async function callDeepSeek(
         Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: 16384,
-        // deepseek-flash otherwise spends the whole budget on hidden
-        // reasoning and returns an empty answer for dense exam images.
-        reasoning_effort: 'none',
-        temperature: 0.3,
-      }),
+      body: JSON.stringify(requestBody),
     },
     timeoutMs,
   );
+  let response = await fetchCompletion();
+  if (!response.ok && response.status === 400) {
+    // Newer/older models may not accept every optional parameter. Retry
+    // without the rejected knob instead of failing the whole request.
+    if (/reasoning|effort/i.test(response.text)) {
+      delete requestBody.reasoning_effort;
+      response = await fetchCompletion();
+    }
+    if (!response.ok && response.status === 400
+        && /temperature/i.test(response.text)) {
+      delete requestBody.temperature;
+      response = await fetchCompletion();
+    }
+    if (!response.ok && response.status === 400
+        && /max[ _]?tokens/i.test(response.text)) {
+      requestBody.max_tokens = 4096;
+      response = await fetchCompletion();
+    }
+  }
   if (!response.ok) {
     throw new Error(`deepseek HTTP ${response.status}: ${response.text.slice(0, 300)}`);
   }
