@@ -214,8 +214,49 @@ async function fetchJson(
   }
 }
 
-function buildUserContent(prompt: string, attachment: Attachment | null) {
-  if (attachment?.type === 'image') {
+function parseToolArgs(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return {};
+}
+
+function toolCallAnswer(message: Record<string, any> | null | undefined): string {
+  if (!message) return '';
+  const calls = message.tool_calls;
+  if (Array.isArray(calls) && calls.length) {
+    const call = calls[0] || {};
+    const fn = (call.function && typeof call.function === 'object')
+      ? call.function : call;
+    const name = String(fn.name || call.name || '');
+    if (name) {
+      return JSON.stringify({
+        tool: name,
+        args: parseToolArgs(fn.arguments ?? fn.parameters ?? call.arguments),
+      });
+    }
+  }
+  const fn = message.function_call;
+  if (fn && typeof fn === 'object' && fn.name) {
+    return JSON.stringify({
+      tool: String(fn.name),
+      args: parseToolArgs(fn.arguments),
+    });
+  }
+  return '';
+}
+
+function buildUserContent(prompt: string, attachment: Attachment | null) {  if (attachment?.type === 'image') {
     const mime = mimeFromName(attachment.name || '');
     return [
       { type: 'text', text: prompt || 'Hãy phân tích ảnh này.' },
@@ -269,8 +310,25 @@ async function callDeepSeek(
     throw new Error(`deepseek HTTP ${response.status}: ${response.text.slice(0, 300)}`);
   }
   const data = response.data as Record<string, any>;
-  const answer = data?.choices?.[0]?.message?.content;
+  const choice = data?.choices?.[0] || {};
+  const message = choice.message || {};
+  const nativeTool = toolCallAnswer(message);
+  const rawContent = message.content;
+  const answer = Array.isArray(rawContent)
+    ? rawContent.map((part: any) => part?.text || '').join('')
+    : rawContent;
+  if ((!answer || !String(answer).trim()) && nativeTool) {
+    return {
+      answer: nativeTool,
+      provider: 'deepseek',
+      model,
+      usage: (data.usage || {}) as Record<string, unknown>,
+    };
+  }
   if (!answer || !String(answer).trim()) {
+    if (choice.finish_reason === 'length') {
+      throw new Error('deepseek answer truncated by max_tokens');
+    }
     throw new Error('deepseek empty answer');
   }
   return {
@@ -329,12 +387,36 @@ async function callMuse(
   }
   const data = response.data as Record<string, any>;
   let answer = '';
+  let toolAnswer = '';
   for (const item of data?.output || []) {
+    if (item?.type === 'function_call' || item?.type === 'tool_call') {
+      const fn = (item.function && typeof item.function === 'object')
+        ? item.function : item;
+      const name = String(fn.name || '');
+      if (name) {
+        toolAnswer = JSON.stringify({
+          tool: name,
+          args: parseToolArgs(fn.arguments ?? fn.parameters),
+        });
+      }
+      continue;
+    }
     if (item?.type !== 'message') continue;
     for (const content of item?.content || []) {
       if (content?.type === 'output_text') answer += content?.text || '';
+      if (content?.type === 'function_call' || content?.type === 'tool_call') {
+        const name = String(content.name || content.function?.name || '');
+        if (name) {
+          toolAnswer = JSON.stringify({
+            tool: name,
+            args: parseToolArgs(content.arguments
+              ?? content.function?.arguments),
+          });
+        }
+      }
     }
   }
+  if (!answer.trim() && toolAnswer) answer = toolAnswer;
   if (!answer.trim()) throw new Error('muse empty answer');
   return {
     answer: answer.trim(),
