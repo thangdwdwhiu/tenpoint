@@ -6,13 +6,32 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const SYSTEM_PROMPT = `Bạn là trợ lý AI hỗ trợ khách hàng của RelayDesk/SupportHelper.
-- Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng, theo từng bước.
-- Chỉ hướng dẫn sử dụng phần mềm và xử lý sự cố thông thường.
-- Không yêu cầu mật khẩu, OTP, dữ liệu cá nhân hoặc bí mật.
-- Không hướng dẫn phá hệ thống, xoá dữ liệu, tắt bảo mật.
-- Không tự nhận mình là hỗ trợ viên; bạn là trợ lý AI.
-- Nếu không chắc chắn, hãy đề nghị khách gửi yêu cầu cho hỗ trợ viên.`;
+const SYSTEM_PROMPT = `Bạn là Xuanova, một trợ lý AI đa năng chạy trên máy Windows của người dùng.
+Bạn có thể trả lời mọi câu hỏi thông thường, phân tích, lập trình, dịch, tóm tắt, đọc tài liệu và hướng dẫn sử dụng phần mềm.
+Bạn KHÔNG tự nhận mình là hỗ trợ viên hay nhân viên; bạn là Xuanova.
+Không hướng dẫn chế tạo malware, tấn công hệ thống, trộm mật khẩu hoặc hành vi phạm pháp.
+Khi người dùng yêu cầu hành động trên máy, hãy dùng công cụ bên dưới nếu phù hợp; bot sẽ hỏi xác nhận trước khi thực thi.`;
+
+const AGENT_PROMPT = `BẠN ĐANG Ở CHẾ ĐỘ AGENT.
+Bạn có thể yêu cầu bot thực hiện một công cụ. Khi cần công cụ, chỉ trả về ĐÚNG MỘT object JSON, không kèm văn bản, không dùng markdown:
+{"tool":"<tên_công_cụ>","args":{...}}
+
+Công cụ có sẵn:
+- read_file: {"path":"C:\\\\duong\\\\dan\\\\file"} — đọc text/PDF/DOCX/XLSX, tối đa ~200KB.
+- write_file: {"path":"C:\\\\...","content":"...","base64":false} — ghi/ghi đè file; có xác nhận.
+- list_dir: {"path":"C:\\\\..."} — liệt kê thư mục.
+- run_shell: {"command":"..."} — chạy lệnh CMD; có xác nhận.
+- get_info: {} — thông tin máy.
+- chrome_tabs: {} — liệt kê tab Chrome.
+- chrome_open: {"url":"https://..."} — mở URL trong Chrome.
+- chrome_switch: {"index":0} — chuyển tab.
+- chrome_read_dom: {} — đọc text trang hiện tại.
+- chrome_fill: {"selector":"CSS","value":"..."} — điền input/textarea.
+- chrome_click: {"selector":"CSS"} — bấm phần tử.
+- chrome_eval: {"code":"JS"} — chạy JavaScript trong tab.
+
+Sau khi nhận kết quả công cụ, bạn sẽ được gọi lại để tiếp tục. Nếu đã đủ thông tin, trả lời cuối cùng bằng văn bản bình thường.
+Nếu người dùng từ chối công cụ, hãy dừng hành động đó và giải thích ngắn gọn.`;
 
 type Attachment = {
   type?: string;
@@ -39,10 +58,10 @@ function mimeFromName(name: string): string {
   return 'image/jpeg';
 }
 
-function cleanHistory(value: unknown): HistoryItem[] {
+function cleanHistory(value: unknown, limit = 10): HistoryItem[] {
   if (!Array.isArray(value)) return [];
   const items: HistoryItem[] = [];
-  for (const raw of value.slice(-10)) {
+  for (const raw of value.slice(-limit)) {
     if (!raw || typeof raw !== 'object') continue;
     const role = (raw as Record<string, unknown>).role;
     const content = (raw as Record<string, unknown>).content;
@@ -94,6 +113,17 @@ async function aiProvider(): Promise<'deepseek' | 'muse'> {
       ? 'muse' : 'deepseek';
   } catch {
     return 'deepseek';
+  }
+}
+
+async function nodeAiBlocked(nodeId: string): Promise<boolean> {
+  try {
+    const result = await pool.query(
+      `SELECT ai_blocked FROM nodes WHERE node_id = $1`, [nodeId]);
+    if (result.rowCount === 0) return false;
+    return Boolean(result.rows[0].ai_blocked);
+  } catch {
+    return false;
   }
 }
 
@@ -181,15 +211,18 @@ function buildUserContent(prompt: string, attachment: Attachment | null) {
 
 async function callDeepSeek(
   prompt: string, history: HistoryItem[], attachment: Attachment | null,
+  systemPrompt: string = SYSTEM_PROMPT,
 ): Promise<ProviderResult> {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('missing DEEPSEEK_API_KEY');
   const model = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
   const messages: Array<Record<string, unknown>> = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     ...history,
-    { role: 'user', content: buildUserContent(prompt, attachment) },
   ];
+  if (prompt || attachment) {
+    messages.push({ role: 'user', content: buildUserContent(prompt, attachment) });
+  }
   const response = await fetchJson(
     'https://api.deepseek.com/chat/completions',
     {
@@ -225,6 +258,7 @@ async function callDeepSeek(
 
 async function callMuse(
   prompt: string, history: HistoryItem[], attachment: Attachment | null,
+  systemPrompt: string = SYSTEM_PROMPT,
 ): Promise<ProviderResult> {
   const key = process.env.MUSE_API_KEY;
   if (!key) throw new Error('missing MUSE_API_KEY');
@@ -232,9 +266,9 @@ async function callMuse(
   const historyText = history
     .map((item) => `${item.role === 'user' ? 'Khách' : 'AI'}: ${item.content}`)
     .join('\n');
-  const base = `${SYSTEM_PROMPT}\n\n` +
+  const base = `${systemPrompt}\n\n` +
     (historyText ? `Lịch sử hội thoại:\n${historyText}\n\n` : '') +
-    `Câu hỏi hiện tại: ${prompt || 'Hãy giải câu này.'}`;
+    (prompt ? `Câu hỏi hiện tại: ${prompt}` : 'Hãy tiếp tục xử lý yêu cầu trên.');
 
   let input: unknown = base;
   if (attachment?.type === 'image') {
@@ -307,34 +341,47 @@ export async function POST(req: Request) {
       { ok: false, error: 'AI đang tắt cho khách. Vui lòng liên hệ hỗ trợ viên.' },
       { status: 403, headers: corsHeaders });
   }
+  if (await nodeAiBlocked(nodeId)) {
+    return NextResponse.json(
+      { ok: false, error: 'AI đang bị chặn cho máy này. Vui lòng liên hệ hỗ trợ viên.' },
+      { status: 403, headers: corsHeaders });
+  }
 
+  const agent = Boolean(body.agent);
   const prompt = String(body.prompt || '').trim().slice(0, 4000);
-  const history = cleanHistory(body.history);
+  const history = cleanHistory(body.history, agent ? 30 : 10);
   const attachment = cleanAttachment(body.attachment);
-  if (!prompt && !attachment) {
+  if (!prompt && !attachment && history.length === 0) {
     return NextResponse.json({ ok: false, error: 'empty prompt' },
       { status: 400, headers: corsHeaders });
   }
+  const systemPrompt = agent
+    ? `${SYSTEM_PROMPT}\n\n${AGENT_PROMPT}`
+    : SYSTEM_PROMPT;
 
   const requestId = crypto.randomUUID();
   const now = Date.now();
-  await broadcast(nodeId, {
-    id: `${requestId}-user`,
-    role: 'user',
-    status: 'done',
-    body: prompt || (attachment?.type === 'image'
-      ? 'Hãy phân tích ảnh này.' : 'Hãy phân tích file này.'),
-    attachment: attachment
-      ? { type: attachment.type, name: attachment.name } : null,
-    ts: now,
-  });
-  await broadcast(nodeId, {
-    id: `${requestId}-status`,
-    role: 'assistant',
-    status: 'thinking',
-    body: 'AI đang trả lời...',
-    ts: now,
-  });
+  if (prompt || attachment) {
+    await broadcast(nodeId, {
+      id: `${requestId}-user`,
+      role: 'user',
+      status: 'done',
+      body: prompt || (attachment?.type === 'image'
+        ? 'Hãy phân tích ảnh này.' : 'Hãy phân tích file này.'),
+      attachment: attachment
+        ? { type: attachment.type, name: attachment.name } : null,
+      ts: now,
+    });
+  }
+  if (!agent) {
+    await broadcast(nodeId, {
+      id: `${requestId}-status`,
+      role: 'assistant',
+      status: 'thinking',
+      body: 'AI đang trả lời...',
+      ts: now,
+    });
+  }
 
   let result: ProviderResult | null = null;
   let lastError = '';
@@ -344,7 +391,7 @@ export async function POST(req: Request) {
   const primaryName = preferred === 'muse' ? 'Muse' : 'DeepSeek';
   const fallbackName = preferred === 'muse' ? 'DeepSeek' : 'Muse';
   try {
-    result = await primary(prompt, history, attachment);
+    result = await primary(prompt, history, attachment, systemPrompt);
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error);
     console.warn(`[AI] ${primaryName} failed, falling back to ${fallbackName}:`,
@@ -352,7 +399,7 @@ export async function POST(req: Request) {
   }
   if (!result) {
     try {
-      result = await fallback(prompt, history, attachment);
+      result = await fallback(prompt, history, attachment, systemPrompt);
     } catch (error) {
       const fallbackError = error instanceof Error
         ? error.message : String(error);
@@ -374,16 +421,18 @@ export async function POST(req: Request) {
   }
 
   await bumpUsage(nodeId, result.usage);
-  await broadcast(nodeId, {
-    id: `${requestId}-answer`,
-    role: 'assistant',
-    status: 'done',
-    body: result.answer,
-    provider: result.provider,
-    model: result.model,
-    usage: result.usage,
-    ts: Date.now(),
-  });
+  if (!agent) {
+    await broadcast(nodeId, {
+      id: `${requestId}-answer`,
+      role: 'assistant',
+      status: 'done',
+      body: result.answer,
+      provider: result.provider,
+      model: result.model,
+      usage: result.usage,
+      ts: Date.now(),
+    });
+  }
   return NextResponse.json({
     ok: true,
     answer: result.answer,

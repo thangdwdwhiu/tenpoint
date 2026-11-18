@@ -74,6 +74,7 @@ async function init() {
         node_id TEXT PRIMARY KEY, device_label TEXT, account_label TEXT,
         platform TEXT, last_ip TEXT, consent_at BIGINT, expires_at BIGINT, last_seen BIGINT
       );
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS ai_blocked BOOLEAN DEFAULT FALSE;
       CREATE TABLE IF NOT EXISTS tasks (
         id BIGSERIAL PRIMARY KEY, node_id TEXT, task TEXT,
         status TEXT DEFAULT 'pending', report TEXT, created_at BIGINT, executed_at BIGINT,
