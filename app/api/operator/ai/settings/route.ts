@@ -8,20 +8,24 @@ export const dynamic = 'force-dynamic';
 async function readSettings(): Promise<{
   ai_enabled: boolean;
   ai_provider: 'deepseek' | 'muse';
+  ai_allow_choice: boolean;
 }> {
   try {
     const result = await pool.query(
       `SELECT key, value FROM app_settings
-       WHERE key IN ('ai_enabled', 'ai_provider')`);
+       WHERE key IN ('ai_enabled', 'ai_provider', 'ai_allow_choice')`);
     const values = new Map(
       result.rows.map((row) => [String(row.key), String(row.value)]));
     return {
       ai_enabled: (values.get('ai_enabled') ?? 'true').toLowerCase() === 'true',
       ai_provider: (values.get('ai_provider') ?? 'deepseek').toLowerCase()
         === 'muse' ? 'muse' : 'deepseek',
+      ai_allow_choice:
+        (values.get('ai_allow_choice') ?? 'true').toLowerCase() === 'true',
     };
   } catch {
-    return { ai_enabled: true, ai_provider: 'deepseek' };
+    return { ai_enabled: true, ai_provider: 'deepseek',
+      ai_allow_choice: true };
   }
 }
 
@@ -70,6 +74,16 @@ export async function POST(req: Request) {
            value = EXCLUDED.value,
            updated_at = EXCLUDED.updated_at`,
         [provider, now]);
+    }
+    if ('ai_allow_choice' in body) {
+      const allow = Boolean(body.ai_allow_choice);
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('ai_allow_choice', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET
+           value = EXCLUDED.value,
+           updated_at = EXCLUDED.updated_at`,
+        [allow ? 'true' : 'false', now]);
     }
   } catch (error) {
     return NextResponse.json(

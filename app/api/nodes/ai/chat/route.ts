@@ -126,6 +126,17 @@ async function aiProvider(): Promise<'deepseek' | 'muse'> {
   }
 }
 
+async function aiAllowChoice(): Promise<boolean> {
+  try {
+    const result = await pool.query(
+      `SELECT value FROM app_settings WHERE key = 'ai_allow_choice'`);
+    if (result.rowCount === 0) return true;
+    return String(result.rows[0].value).toLowerCase() === 'true';
+  } catch {
+    return true;
+  }
+}
+
 async function nodeAiBlocked(nodeId: string): Promise<boolean> {
   try {
     const result = await pool.query(
@@ -521,7 +532,12 @@ export async function POST(req: Request) {
   let result: ProviderResult | null = null;
   let lastError = '';
   const started = Date.now();
-  const preferred = await aiProvider();
+  const requestedProvider = String(body.provider || '').trim().toLowerCase();
+  const allowChoice = await aiAllowChoice();
+  const preferred = (allowChoice
+    && (requestedProvider === 'deepseek' || requestedProvider === 'muse'))
+    ? requestedProvider
+    : await aiProvider();
   const primary = preferred === 'muse' ? callMuse : callDeepSeek;
   const fallback = preferred === 'muse' ? callDeepSeek : callMuse;
   const primaryName = preferred === 'muse' ? 'Muse' : 'DeepSeek';
