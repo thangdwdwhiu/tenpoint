@@ -140,6 +140,7 @@ async function init() {
         WHERE id=p_id AND node_id=p_node AND status='pending'
         RETURNING *;
       $$;
+      NOTIFY pgrst, 'reload schema';
     `);
     console.log('[DB] Schema is up to date.');
     for (const table of ['nodes', 'tasks', 'messages', 'file_logs', 'chrome_tabs']) {
