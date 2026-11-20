@@ -107,6 +107,31 @@ async function init() {
       CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY, value TEXT, updated_at BIGINT
       );
+      CREATE TABLE IF NOT EXISTS license_keys (
+        id BIGSERIAL PRIMARY KEY,
+        key_value TEXT UNIQUE NOT NULL,
+        expiry_mode TEXT NOT NULL DEFAULT 'days',
+        duration_seconds BIGINT,
+        expires_at BIGINT,
+        created_at BIGINT NOT NULL,
+        activated_at BIGINT,
+        bound_node_id TEXT,
+        device_label TEXT,
+        last_check_at BIGINT,
+        last_ip TEXT,
+        check_count BIGINT DEFAULT 0
+      );
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS expiry_mode TEXT DEFAULT 'days';
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS duration_seconds BIGINT;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS expires_at BIGINT;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS activated_at BIGINT;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS bound_node_id TEXT;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS device_label TEXT;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS last_check_at BIGINT;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS last_ip TEXT;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS check_count BIGINT DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS license_keys_created_idx ON license_keys (created_at DESC);
+      CREATE INDEX IF NOT EXISTS license_keys_bound_idx ON license_keys (bound_node_id);
       INSERT INTO app_settings (key, value, updated_at)
       VALUES ('ai_enabled', 'true', EXTRACT(EPOCH FROM now())::BIGINT)
       ON CONFLICT (key) DO NOTHING;
