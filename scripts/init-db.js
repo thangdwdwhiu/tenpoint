@@ -130,6 +130,28 @@ async function init() {
       ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS last_check_at BIGINT;
       ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS last_ip TEXT;
       ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS check_count BIGINT DEFAULT 0;
+      ALTER TABLE license_keys ADD COLUMN IF NOT EXISTS max_devices INT DEFAULT 1;
+      UPDATE license_keys SET max_devices = 1 WHERE max_devices IS NULL;
+      CREATE TABLE IF NOT EXISTS license_key_devices (
+        id BIGSERIAL PRIMARY KEY,
+        key_id BIGINT NOT NULL REFERENCES license_keys(id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL,
+        device_label TEXT,
+        platform TEXT,
+        activated_at BIGINT,
+        last_check_at BIGINT,
+        last_ip TEXT,
+        check_count BIGINT DEFAULT 0,
+        UNIQUE (key_id, node_id)
+      );
+      CREATE INDEX IF NOT EXISTS license_key_devices_key_idx
+        ON license_key_devices (key_id, id);
+      INSERT INTO license_key_devices
+        (key_id, node_id, device_label, activated_at, last_check_at)
+      SELECT id, bound_node_id, device_label, activated_at, last_check_at
+        FROM license_keys
+       WHERE bound_node_id IS NOT NULL AND bound_node_id <> ''
+      ON CONFLICT (key_id, node_id) DO NOTHING;
       CREATE INDEX IF NOT EXISTS license_keys_created_idx ON license_keys (created_at DESC);
       CREATE INDEX IF NOT EXISTS license_keys_bound_idx ON license_keys (bound_node_id);
       INSERT INTO app_settings (key, value, updated_at)

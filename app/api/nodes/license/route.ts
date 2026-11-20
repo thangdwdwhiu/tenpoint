@@ -74,12 +74,14 @@ export async function POST(req: Request) {
         expiresAt = now + Math.max(60, duration);
       }
       if (expiresAt && expiresAt <= now) {
+        await pool.query(`DELETE FROM license_keys WHERE id = $1`, [row.id]);
         return NextResponse.json({ error: 'expired' },
           { status: 403, headers: corsHeaders });
       }
       const activated = await pool.query(
         `UPDATE license_keys
-            SET activated_at = $1, expires_at = $2, bound_node_id = $3,
+            SET activated_at = $1, expires_at = $2,
+                bound_node_id = COALESCE(bound_node_id, $3),
                 device_label = COALESCE(NULLIF($4, ''), device_label),
                 last_check_at = $1, last_ip = $5,
                 check_count = COALESCE(check_count, 0) + 1
@@ -95,23 +97,42 @@ export async function POST(req: Request) {
       }
     }
 
-    if (row.bound_node_id && String(row.bound_node_id) !== nodeId) {
-      return NextResponse.json({ error: 'key_in_use' },
+    // Each key can be activated on up to max_devices different nodes.
+    let deviceResult = await pool.query(
+      `SELECT * FROM license_key_devices
+        WHERE key_id = $1 AND node_id = $2`, [row.id, nodeId]);
+    if (deviceResult.rowCount === 0) {
+      const maxDevices = Math.max(1, Number(row.max_devices) || 1);
+      const countResult = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM license_key_devices
+          WHERE key_id = $1`, [row.id]);
+      const used = Number(countResult.rows[0]?.count) || 0;
+      if (used >= maxDevices) {
+        return NextResponse.json({ error: 'device_limit',
+          used, max: maxDevices },
         { status: 403, headers: corsHeaders });
-    }
-    // Legacy keys that were never bound: bind to the first node that checks.
-    if (!row.bound_node_id) {
+      }
+      deviceResult = await pool.query(
+        `INSERT INTO license_key_devices
+           (key_id, node_id, device_label, platform, activated_at,
+            last_check_at, last_ip, check_count)
+         VALUES ($1, $2, $3, $4, $5, $5, $6, 1)
+         ON CONFLICT (key_id, node_id) DO UPDATE SET
+           device_label = COALESCE(EXCLUDED.device_label, license_key_devices.device_label),
+           last_check_at = EXCLUDED.last_check_at,
+           last_ip = EXCLUDED.last_ip,
+           check_count = COALESCE(license_key_devices.check_count, 0) + 1
+         RETURNING *`,
+        [row.id, nodeId, deviceLabel, platform, now, ip]);
+    } else {
       await pool.query(
-        `UPDATE license_keys SET bound_node_id = $1,
-           device_label = COALESCE(NULLIF($2, ''), device_label),
-           activated_at = COALESCE(activated_at, $3),
-           last_check_at = $3, last_ip = $4,
-           check_count = COALESCE(check_count, 0) + 1
-         WHERE id = $5`,
-        [nodeId, deviceLabel, now, ip, row.id]);
-      row.bound_node_id = nodeId;
-      row.device_label = deviceLabel || row.device_label;
-      row.activated_at = row.activated_at || now;
+        `UPDATE license_key_devices
+            SET last_check_at = $1, last_ip = $2,
+                check_count = COALESCE(check_count, 0) + 1
+          WHERE id = $3`, [now, ip, deviceResult.rows[0].id]);
+      deviceResult = await pool.query(
+        `SELECT * FROM license_key_devices WHERE id = $1`,
+        [deviceResult.rows[0].id]);
     }
 
     let expiresAt = row.expires_at ? Number(row.expires_at) : null;
@@ -125,6 +146,7 @@ export async function POST(req: Request) {
       }
     }
     if (expiresAt && expiresAt <= now) {
+      await pool.query(`DELETE FROM license_keys WHERE id = $1`, [row.id]);
       return NextResponse.json({ error: 'expired' },
         { status: 403, headers: corsHeaders });
     }
@@ -132,14 +154,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'invalid_key' },
         { status: 403, headers: corsHeaders });
     }
-    if (expiresAt && row.bound_node_id === nodeId) {
-      await pool.query(
-        `UPDATE license_keys
-            SET last_check_at = $1, last_ip = $2,
-                check_count = COALESCE(check_count, 0) + 1
-          WHERE id = $3`, [now, ip, row.id]);
-    }
+    await pool.query(
+      `UPDATE license_keys
+          SET last_check_at = $1, last_ip = $2,
+              check_count = COALESCE(check_count, 0) + 1
+        WHERE id = $3`, [now, ip, row.id]);
 
+    const device = deviceResult.rows[0] || {};
     const never = row.expiry_mode === 'never';
     const payload = {
       key,
@@ -148,7 +169,7 @@ export async function POST(req: Request) {
       expires_at: never ? null : expiresAt,
       never,
       server_time: now,
-      device_label: row.device_label || deviceLabel || '',
+      device_label: device.device_label || deviceLabel || '',
       platform,
     };
     return NextResponse.json({
