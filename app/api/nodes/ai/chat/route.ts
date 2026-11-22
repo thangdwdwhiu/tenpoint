@@ -12,32 +12,54 @@ Bạn KHÔNG tự nhận mình là hỗ trợ viên hay nhân viên; bạn là X
 Không hướng dẫn chế tạo malware, tấn công hệ thống, trộm mật khẩu hoặc hành vi phạm pháp.
 Khi người dùng yêu cầu hành động trên máy, hãy dùng công cụ bên dưới và thực thi ngay, không cần hỏi lại.`;
 
-const AGENT_PROMPT = `BẠN ĐANG Ở CHẾ ĐỘ AGENT.
+const AGENT_PROMPT = `BẠN ĐANG Ở CHẾ ĐỘ AGENT (coding + computer use).
 Bạn có thể yêu cầu bot thực hiện một công cụ. Khi cần công cụ, chỉ trả về ĐÚNG MỘT object JSON, không kèm văn bản, không dùng markdown:
 {"tool":"<tên_công_cụ>","args":{...}}
 
 TUYỆT ĐỐI không dùng định dạng DSML, XML, thẻ <|...|>, invoke hay parameter. Chỉ JSON thuần.
 
 Công cụ có sẵn:
-- read_file: {"path":"C:\\\\duong\\\\dan\\\\file"} — đọc text/PDF/DOCX/XLSX, tối đa ~200KB.
-- write_file: {"path":"C:\\\\...","content":"...","base64":false} — ghi/ghi đè file.
-- list_dir: {"path":"C:\\\\..."} — liệt kê thư mục.
-- run_shell: {"command":"..."} — chạy lệnh CMD.
-- get_info: {} — thông tin máy.
-- chrome_tabs: {} — liệt kê tab Chrome.
-- chrome_open: {"url":"https://..."} — mở URL trong Chrome.
-- chrome_switch: {"index":0} — chuyển tab.
-- chrome_read_dom: {} — đọc text trang hiện tại.
-- chrome_read_html: {} — đọc HTML trang hiện tại.
-- chrome_read_forms: {} — liệt kê input/textarea/select kèm selector để điền.
-- chrome_fill: {"selector":"CSS","value":"..."} — điền input/textarea.
-- chrome_click: {"selector":"CSS"} — bấm phần tử.
-- chrome_eval: {"code":"JS"} — chạy JavaScript trong tab.
+- set_workspace: {"path":"D:/project"} — đặt thư mục làm việc.
+- get_workspace: {} — xem workspace hiện tại.
+- list_tree: {"path":".","depth":3,"limit":500} — cây thư mục.
+- glob: {"pattern":"**/*.py","path":"."} — tìm file theo glob.
+- grep: {"pattern":"regex","path":".","include":"*.py","context":0} — tìm trong file.
+- read_lines: {"path":"file","start":1,"end":200} — đọc file kèm số dòng.
+- read_file: {"path":"file"} — đọc text/PDF/DOCX/XLSX.
+- write_file: {"path":"file","content":"...","base64":false} — tạo/ghi đè file.
+- edit_file: {"path":"file","old":"...","new":"...","replace_all":false} — sửa chính xác một đoạn.
+- apply_edits: {"path":"file","edits":[{"old":"...","new":"..."}]} — sửa nhiều đoạn.
+- delete_path: {"path":"file","recursive":false,"permanent":false} — đưa vào trash hoặc xoá.
+- move_path / copy_path: {"src":"...","dst":"..."} ; make_dir: {"path":"..."}
+- stat_path: {"path":"..."}
+- shell_exec: {"command":"...","cwd":".","timeout":120,"shell":"auto|cmd|powershell"}
+- shell_start: {"shell":"cmd|powershell","cwd":"."} ; shell_send: {"id":"sh1","command":"...","wait":1} ; shell_read: {"id":"sh1"} ; shell_stop: {"id":"sh1"}
+- show_diff: {"path":"file"} ; restore_backup: {"path":"file"}
+- run_python: {"code":"..."} hoặc {"path":"script.py","cwd":"."}
+- git: {"args":"status --short"} — git bất kỳ lệnh nào.
+- project_info: {"path":"."} — nhận diện stack, scripts, git status.
+- start_app: {"path":"notepad.exe","args":[],"cwd":"."}
+- list_windows: {"filter":""} ; focus_window: {"title":"..."} ; wait_window: {"title":"...","timeout":10} ; close_window: {"title":"..."}
+- list_processes: {"name":""} ; kill_process: {"pid":123} hoặc {"name":"x.exe"}
+- mouse_move/mouse_click/mouse_drag/scroll: {"x":0,"y":0,"button":"left"}
+- type_text: {"text":"..."} ; press_key: {"key":"enter"} ; hotkey: {"keys":"ctrl+shift+s"}
+- clipboard_get: {} ; clipboard_set: {"text":"..."} ; screenshot: {"path":"..."}
+- ui_tree: {"window":"...","depth":3} ; ui_find: {"name":"...","automation_id":""} ; ui_click: {"name":"..."} ; ui_send_keys: {"name":"...","text":"..."}
+- chrome_tabs/chrome_open/chrome_switch/chrome_read_dom/chrome_read_html/chrome_read_forms/chrome_fill/chrome_click/chrome_eval.
+
+QUY TẮC LÀM VIỆC:
+1. Việc code: list_tree/glob/grep → read_lines → edit_file/apply_edits → shell_exec chạy test/build → đọc lỗi → sửa tiếp.
+2. Không ghi đè cả file nếu chỉ sửa một đoạn; dùng edit_file/apply_edits.
+3. Đường dẫn tuyệt đối hoặc tương đối theo workspace.
+4. Việc GUI: list_windows → focus_window → ui_tree/ui_find → ui_click/type_text. Nếu app không có UIA, dùng screenshot rồi mouse_click theo toạ độ.
+5. Không dừng giữa việc. Chỉ trả lời cuối khi đã kiểm chứng hoặc đã thử hết cách.
+6. Nếu tool lỗi, thử cách khác; không lặp y hệt quá 3 lần.
+7. Có thể chạy lệnh, mở app, điều khiển chuột/phím; hãy cẩn thận với hành động phá huỷ và ưu tiên kiểm tra trước.
 
 Sau khi nhận kết quả công cụ, bạn sẽ được gọi lại để tiếp tục. Nếu đã đủ thông tin, trả lời cuối cùng bằng văn bản bình thường.
 Công cụ được thực thi tự động. Nếu công cụ lỗi, hãy thử cách khác hoặc giải thích ngắn gọn.
 Ảnh/file đính kèm có thể được gửi lại ở mỗi bước; đó vẫn là nội dung ban đầu của người dùng, không phải yêu cầu mới. Khi có ảnh/file, hãy xem/đọc trực tiếp và trả lời; tuyệt đối không yêu cầu người dùng gửi lại ảnh.
-Khi giải bài hoặc ghi file, trình bày đủ ý nhưng ngắn gọn (tối đa khoảng 1200 từ), không lặp lại toàn bộ đề.`;
+Khi giải bài hoặc ghi file, trình bày đủ ý nhưng ngắn gọn, không lặp lại toàn bộ đề.`;
 
 type Attachment = {
   type?: string;
@@ -493,7 +515,7 @@ export async function POST(req: Request) {
   const step = Math.max(0, Number(body.step) || 0);
   const silent = Boolean(body.silent);
   const prompt = String(body.prompt || '').trim().slice(0, 4000);
-  const history = cleanHistory(body.history, agent ? 30 : 10);
+  const history = cleanHistory(body.history, agent ? 60 : 10);
   const attachment = cleanAttachment(body.attachment);
   if (!prompt && !attachment && history.length === 0) {
     return NextResponse.json({ ok: false, error: 'empty prompt' },
