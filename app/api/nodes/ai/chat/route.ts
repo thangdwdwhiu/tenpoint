@@ -125,6 +125,32 @@ function cleanAttachment(value: unknown): Attachment | null {
   return null;
 }
 
+function cleanAttachments(value: unknown, single: unknown): Attachment[] {
+  const raw = Array.isArray(value)
+    ? value
+    : (single ? [single] : []);
+  const out: Attachment[] = [];
+  let imageChars = 0;
+  let textChars = 0;
+  for (const item of raw) {
+    const cleaned = cleanAttachment(item);
+    if (!cleaned) continue;
+    if (cleaned.type === 'image') {
+      if (out.filter((entry) => entry.type === 'image').length >= 6) continue;
+      const size = (cleaned.data || '').length;
+      if (imageChars + size > 3_500_000) continue;
+      imageChars += size;
+    } else {
+      if (out.filter((entry) => entry.type === 'text').length >= 6) continue;
+      const size = (cleaned.text || '').length;
+      if (textChars + size > 40_000) continue;
+      textChars += size;
+    }
+    out.push(cleaned);
+  }
+  return out;
+}
+
 async function aiEnabled(): Promise<boolean> {
   try {
     const result = await pool.query(
@@ -293,24 +319,31 @@ function toolCallAnswer(message: Record<string, any> | null | undefined): string
   return '';
 }
 
-function buildUserContent(prompt: string, attachment: Attachment | null) {  if (attachment?.type === 'image') {
-    const mime = mimeFromName(attachment.name || '');
-    return [
-      { type: 'text', text: prompt || 'Hãy phân tích ảnh này.' },
-      {
-        type: 'image_url',
-        image_url: { url: `data:${mime};base64,${attachment.data || ''}` },
-      },
-    ];
+function buildUserContent(prompt: string, attachments: Attachment[]) {
+  const images = attachments.filter((item) => item.type === 'image');
+  const files = attachments.filter((item) => item.type === 'text');
+  let text = prompt || (images.length
+    ? 'Hãy phân tích ảnh này.'
+    : 'Hãy phân tích file này.');
+  for (const file of files) {
+    text += `\n\n--- File: ${file.name} ---\n${file.text || ''}`;
   }
-  if (attachment?.type === 'text') {
-    return `${prompt || 'Hãy phân tích file này.'}\n\n--- File: ${attachment.name} ---\n${attachment.text || ''}`;
+  if (!images.length) return text;
+  const content: Array<Record<string, unknown>> = [
+    { type: 'text', text },
+  ];
+  for (const image of images) {
+    const mime = mimeFromName(image.name || '');
+    content.push({
+      type: 'image_url',
+      image_url: { url: `data:${mime};base64,${image.data || ''}` },
+    });
   }
-  return prompt || 'Hãy giải câu này.';
+  return content;
 }
 
 async function callDeepSeek(
-  prompt: string, history: HistoryItem[], attachment: Attachment | null,
+  prompt: string, history: HistoryItem[], attachments: Attachment[],
   systemPrompt: string = SYSTEM_PROMPT, timeoutMs: number = 50000,
 ): Promise<ProviderResult> {
   const key = process.env.DEEPSEEK_API_KEY;
@@ -320,8 +353,11 @@ async function callDeepSeek(
     { role: 'system', content: systemPrompt },
     ...history,
   ];
-  if (prompt || attachment) {
-    messages.push({ role: 'user', content: buildUserContent(prompt, attachment) });
+  if (prompt || attachments.length) {
+    messages.push({
+      role: 'user',
+      content: buildUserContent(prompt, attachments),
+    });
   }
   const requestBody: Record<string, any> = {
     model,
@@ -397,7 +433,7 @@ async function callDeepSeek(
 }
 
 async function callMuse(
-  prompt: string, history: HistoryItem[], attachment: Attachment | null,
+  prompt: string, history: HistoryItem[], attachments: Attachment[],
   systemPrompt: string = SYSTEM_PROMPT, timeoutMs: number = 40000,
 ): Promise<ProviderResult> {
   const key = process.env.MUSE_API_KEY;
@@ -409,22 +445,26 @@ async function callMuse(
   const base = `${systemPrompt}\n\n` +
     (historyText ? `Lịch sử hội thoại:\n${historyText}\n\n` : '') +
     (prompt ? `Câu hỏi hiện tại: ${prompt}` : 'Hãy tiếp tục xử lý yêu cầu trên.');
+  const files = attachments.filter((item) => item.type === 'text');
+  const images = attachments.filter((item) => item.type === 'image');
+  let text = base;
+  for (const file of files) {
+    text += `\n\n--- File: ${file.name} ---\n${file.text || ''}`;
+  }
 
-  let input: unknown = base;
-  if (attachment?.type === 'image') {
-    const mime = mimeFromName(attachment.name || '');
-    input = [{
-      role: 'user',
-      content: [
-        { type: 'input_text', text: base },
-        {
-          type: 'input_image',
-          image_url: `data:${mime};base64,${attachment.data || ''}`,
-        },
-      ],
-    }];
-  } else if (attachment?.type === 'text') {
-    input = `${base}\n\n--- File: ${attachment.name} ---\n${attachment.text || ''}`;
+  let input: unknown = text;
+  if (images.length) {
+    const content: Array<Record<string, unknown>> = [
+      { type: 'input_text', text },
+    ];
+    for (const image of images) {
+      const mime = mimeFromName(image.name || '');
+      content.push({
+        type: 'input_image',
+        image_url: `data:${mime};base64,${image.data || ''}`,
+      });
+    }
+    input = [{ role: 'user', content }];
   }
 
   const response = await fetchJson(
@@ -517,7 +557,8 @@ export async function POST(req: Request) {
   const prompt = String(body.prompt || '').trim().slice(0, 4000);
   const history = cleanHistory(body.history, agent ? 60 : 10);
   const attachment = cleanAttachment(body.attachment);
-  if (!prompt && !attachment && history.length === 0) {
+  const attachments = cleanAttachments(body.attachments, body.attachment);
+  if (!prompt && attachments.length === 0 && history.length === 0) {
     return NextResponse.json({ ok: false, error: 'empty prompt' },
       { status: 400, headers: corsHeaders });
   }
@@ -529,15 +570,18 @@ export async function POST(req: Request) {
   const now = Date.now();
   // Agent steps after the first resend the attachment so vision survives
   // tool calls; do not echo it as a new user message in the panel.
-  if ((prompt || attachment) && !silent && (!agent || step === 0)) {
+  if ((prompt || attachments.length) && !silent && (!agent || step === 0)) {
     await broadcast(nodeId, {
       id: `${requestId}-user`,
       role: 'user',
       status: 'done',
-      body: prompt || (attachment?.type === 'image'
+      body: prompt || (attachments.some((item) => item.type === 'image')
         ? 'Hãy phân tích ảnh này.' : 'Hãy phân tích file này.'),
       attachment: attachment
         ? { type: attachment.type, name: attachment.name } : null,
+      attachments: attachments.map((item) => ({
+        type: item.type, name: item.name,
+      })),
       ts: now,
     });
   }
@@ -569,7 +613,7 @@ export async function POST(req: Request) {
   const primaryTimeout = preferred === 'muse' ? 40000 : 50000;
   try {
     result = await primary(
-      prompt, history, attachment, systemPrompt, primaryTimeout);
+      prompt, history, attachments, systemPrompt, primaryTimeout);
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error);
     console.warn(`[AI] ${primaryName} failed, falling back to ${fallbackName}:`,
@@ -579,7 +623,7 @@ export async function POST(req: Request) {
     const remaining = Math.max(6000, 55000 - (Date.now() - started));
     try {
       result = await fallback(
-        prompt, history, attachment, systemPrompt, remaining);
+        prompt, history, attachments, systemPrompt, remaining);
     } catch (error) {
       const fallbackError = error instanceof Error
         ? error.message : String(error);
